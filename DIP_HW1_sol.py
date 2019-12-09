@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import scipy
 from scipy import misc
 from scipy.signal import convolve2d
-
+from skimage import restoration
 import scipy.misc
 import math
 
@@ -28,6 +28,7 @@ class Trajectories:
         mat = scipy.io.loadmat(traj_file_path)
         self.X = mat['X']
         self.Y = mat['Y']
+        self.num_traj = len(self.X)
 
     def get_traj_for_frame(self, frame_num: int)->(np.ndarray, np.ndarray):
         """
@@ -55,7 +56,7 @@ class Trajectories:
         for frame_num in range(len(self.X)):
             self.plot_traj(frame_num)
 
-    def generate_kernel_for_frame_num(self, frame_num: int, plot: bool=False, kernel_size: int = DEFAULT_KERNEL_SIZE,)-> np.ndarray:
+    def generate_kernel_for_frame_num(self, frame_num: int, show: bool=False, kernel_size: int = DEFAULT_KERNEL_SIZE,)-> np.ndarray:
         """
         Generates a kernel, using the trajectories of the given frame number
         :param frame_num: frame number whose trajectories will be used to
@@ -86,49 +87,65 @@ class Trajectories:
         # This fix this issue
         kernel = np.rot90(kernel)
 
-        if plot:
+        if show:
             plt.imshow(kernel, cmap='gray')
             plt.show()
         return kernel
 
+    def get_kernels_list(self):
+        kernel_list = []
+        for i in range(self.num_traj):
+            kernel_list.append(self.generate_kernel_for_frame_num(i))
+        return kernel_list
 
-class Image:
+
+class BlurredImage:
 
     WHITE_LEVEL = 255
 
-    def __init__(self, path_to_im_file):
+    def __init__(self, path_to_im_file, kernel):
         im = cv2.imread(path_to_im_file, cv2.IMREAD_GRAYSCALE).astype(float)
         im /= self.WHITE_LEVEL
         im = cv2.resize(im, (256, 256,))
-        self.im = im
-        self.__filter = None
+        self.__original_image = im
+        self.__blurred_image = convolve2d(self.__original_image, kernel, boundary='symm',
+                                 mode='same')
 
     @property
-    def filter(self):
-        return self.__filter
+    def original_image(self):
+        return self.__original_image
 
-    @filter.setter
-    def filter(self, kernel):
-        self.__filter = kernel
+    @property
+    def blurred_image(self):
+        return self.__blurred_image
 
-    def show_orig(self):
-        plt.imshow(self.im, cmap='gray')
-        plt.show()
 
-    def show_filtered(self):
-        filtered_im = convolve2d(self.im, self.__filter, boundary='symm', mode='same')
-        plt.imshow(filtered_im, cmap='gray')
-        plt.show()
+class ImageRestorer:
+
+    def __init__(self, path_to_im_file, path_to_traj_file):
+        self.traj = Trajectories(path_to_traj_file)
+        self.blurred_im_list = []
+        for i in range(self.traj.num_traj):
+            im = BlurredImage(path_to_im_file, self.traj.generate_kernel_for_frame_num(i))
+            self.blurred_im_list.append(im.blurred_image)
+
+    def restore_im(self):
+        pass
+
+
+
 
 
 def main():
-    TRAJ_NUM = 5
+    TRAJ_NUM = 0
     trajectories = Trajectories('100_motion_paths.mat')
     trajectories.plot_traj(TRAJ_NUM)
-    kernel = trajectories.generate_kernel_for_frame_num(TRAJ_NUM, True)
-    image = Image("DIPSourceHW1.jpg")
-    image.filter = kernel
-    image.show_filtered()
+    kernel = trajectories.generate_kernel_for_frame_num(TRAJ_NUM, show=True)
+    image = BlurredImage("DIPSourceHW1.jpg", kernel)
+    plt.imshow(image.blurred_image, cmap='gray')
+    plt.show()
+    plt.imshow(image.original_image, cmap='gray')
+    plt.show()
 
 
 if __name__ == '__main__':
