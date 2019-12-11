@@ -3,12 +3,10 @@ import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import scipy
-from scipy import misc
 from scipy.signal import convolve2d
-from skimage import restoration
 import scipy.misc
-import math
-
+import imageio
+from skimage.measure import compare_psnr
 
 class Trajectories:
     """
@@ -37,26 +35,39 @@ class Trajectories:
         """
         return self.X[frame_num], self.Y[frame_num]
 
-    def plot_traj(self, frame_num: int):
+    def plot_traj(self, frame_num: int, show=True, save=False):
         """
         Plots the trajectory for a given frame
         :param frame_num: frame number to be plotted
         """
-        X , Y = self.get_traj_for_frame(frame_num)
-        plt.plot(X, Y)
-        plt.xlabel('X axis movement')
-        plt.ylabel('X axis movement')
-        plt.title("Camera trajectories for frame = {}".format(frame_num))
-        plt.show()
+        if show:
+            X , Y = self.get_traj_for_frame(frame_num)
+            plt.plot(X, Y)
+            plt.xlabel('X axis movement')
+            plt.ylabel('X axis movement')
+            plt.title("Camera trajectories for frame = {}".format(frame_num))
+            plt.show()
+        if save:
+            X , Y = self.get_traj_for_frame(frame_num)
+            plt.plot(X, Y)
+            plt.xlabel('X axis movement')
+            plt.ylabel('X axis movement')
+            plt.title("Camera trajectories for frame = {}".format(frame_num))
+            plt.savefig("Camera_trajectories_{}".format(frame_num))
+            plt.close()
 
-    def plot_all_traj(self):
+    def plot_all_traj(self, show=True, save=False):
         """
         Plots all trajectories
         """
-        for frame_num in range(len(self.X)):
-            self.plot_traj(frame_num)
+        if show:
+            for frame_num in range(len(self.X)):
+                self.plot_traj(frame_num, show=True, save=False)
+        if save:
+            for frame_num in range(len(self.X)):
+                self.plot_traj(frame_num, show=False, save=True)
 
-    def generate_kernel_for_frame_num(self, frame_num: int, show: bool=False, kernel_size: int = DEFAULT_KERNEL_SIZE,)-> np.ndarray:
+    def generate_kernel_for_frame_num(self, frame_num: int, show: bool=False, kernel_size: int = DEFAULT_KERNEL_SIZE,save=False)-> np.ndarray:
         """
         Generates a kernel, using the trajectories of the given frame number
         :param frame_num: frame number whose trajectories will be used to
@@ -90,20 +101,34 @@ class Trajectories:
         if show:
             plt.imshow(kernel, cmap='gray')
             plt.show()
+        if save:
+            imageio.imwrite("PSF_{}.jpg".format(frame_num),
+                            scipy.misc.bytescale(kernel))
         return kernel
 
-    def get_kernels_list(self):
+    def show_save_psf(self, show=True, save=False):
         kernel_list = []
         for i in range(self.num_traj):
             kernel_list.append(self.generate_kernel_for_frame_num(i))
-        return kernel_list
+            if show:
+                plt.imshow(kernel_list[i], cmap='gray')
+                plt.show()
+            if save:
+                imageio.imwrite("PSF_{}.jpg".format(i), scipy.misc.bytescale(kernel_list[i]))
 
 
 class BlurredImage:
+    """
+    This class represents a blurred image
+    """
 
     WHITE_LEVEL = 255
 
     def __init__(self, path_to_im_file, kernel):
+        """
+        :param path_to_im_file: the image file path
+        :param kernel: the kernel to filter with
+        """
         im = cv2.imread(path_to_im_file, cv2.IMREAD_GRAYSCALE).astype(float)
         im /= self.WHITE_LEVEL
         im = cv2.resize(im, (256, 256,))
@@ -120,32 +145,125 @@ class BlurredImage:
         return self.__blurred_image
 
 
-class ImageRestorer:
+class BlurredImageList:
 
     def __init__(self, path_to_im_file, path_to_traj_file):
         self.traj = Trajectories(path_to_traj_file)
-        self.blurred_im_list = []
-        for i in range(self.traj.num_traj):
-            im = BlurredImage(path_to_im_file, self.traj.generate_kernel_for_frame_num(i))
-            self.blurred_im_list.append(im.blurred_image)
+        self.num_images = self.traj.num_traj
+        self.__blurred_images_list = []
+        for i in range(self.num_images):
+            im = BlurredImage(path_to_im_file,
+                              self.traj.generate_kernel_for_frame_num(i))
+            self.__blurred_images_list.append(im.blurred_image)
 
-    def restore_im(self):
-        pass
+    @property
+    def blurred_image_list(self):
+        return self.__blurred_images_list
+
+    def show_save_blurred_image(self, index, show=True, save=False):
+        if show:
+            plt.imshow(self.__blurred_images_list[index], cmap='gray')
+            plt.show()
+        if save:
+            scipy.misc.imsave("blurred_image_{}.jpg".format(index), self.blurred_image_list[index])
+
+    def save_all_blurred_images(self):
+        for i in range(self.num_images):
+            self.show_save_blurred_image(i, show=False, save=True)
 
 
+class ImageRestorer:
+    """
+    This class will restore the image from the blurred images
+    """
+    def __init__(self, blurred_image_list, p=8):
+        """
 
+        :param path_to_im_file: path to image file
+        :param path_to_traj_file:  path to trajectories .m file
+        :param p: int, the power to apply to the algorithm
+        """
+        self.blurred_image_list = blurred_image_list
+        self.p = p
+        self.num_images = len(blurred_image_list)
+        self.filters_list = []
+        self.__restored_image_list = []
+        for i in range(1, self.num_images + 1):
+            fft_sum = 0
+            w_list = []
+            fourier_transform_list = []
+            filters_list = []
+            weighted_image = 0
+            for j in range(i):
+                im_fft = np.fft.fftshift(np.fft.fft2(blurred_image_list[j]))
+                fourier_transform_list.append(im_fft)
+                filter = np.abs(im_fft)**self.p
+                filters_list.append(filter)
+                fft_sum += filter
+            for j in range(i):
+                w_list.append(filters_list[j] / fft_sum)
+            for j in range(i):
+                weighted_image += w_list[j]*fourier_transform_list[j]
+            restored_im = np.abs(np.fft.ifft2(np.fft.ifftshift(weighted_image)))
+            self.__restored_image_list.append(restored_im)
+
+    @property
+    def restored_image_list(self):
+        return self.__restored_image_list
+
+    def show_save_restored_image(self, index, show=True, save=False):
+        if show:
+            plt.imshow(self.__restored_image_list[index], cmap='gray')
+            plt.title("Restored_{}".format(index))
+            plt.show()
+        if save:
+            imageio.imwrite("deblurred_image_{}.jpg".format(index), self.__restored_image_list[index])
+
+    def save_all_restored(self):
+        for i in range(self.num_images):
+            self.show_save_restored_image(i, show=False, save=True)
+
+    def show_all_restored(self):
+        for i in range(self.num_images):
+            self.show_save_restored_image(i, show=True, save=False)
+
+class PSNR_results:
+
+    def __init__(self,original_image, deblurred_image_list):
+        self.__psnr_values = []
+        for image in deblurred_image_list:
+            psnr = compare_psnr(original_image, image)
+            psnr = psnr if psnr > 0 else -1 * psnr
+            self.__psnr_values.append(psnr)
+
+    def save_show_psnr(self, show=True, save=False):
+        plt.plot((np.linspace(1, len(self.__psnr_values) , len(self.__psnr_values))), self.__psnr_values)
+        plt.xlabel('Number of images used for computation')
+        plt.ylabel('PSNR Values in dB')
+        plt.title("PSNR vs Number of images used for computation")
+        if show:
+            plt.show()
+        if save:
+            plt.savefig("PSNR_graph")
+            plt.close()
 
 
 def main():
-    TRAJ_NUM = 0
-    trajectories = Trajectories('100_motion_paths.mat')
-    trajectories.plot_traj(TRAJ_NUM)
-    kernel = trajectories.generate_kernel_for_frame_num(TRAJ_NUM, show=True)
-    image = BlurredImage("DIPSourceHW1.jpg", kernel)
-    plt.imshow(image.blurred_image, cmap='gray')
-    plt.show()
-    plt.imshow(image.original_image, cmap='gray')
-    plt.show()
+    traj = Trajectories('100_motion_paths.mat')
+    # traj.plot_all_traj(show=False, save=True)
+    traj.show_save_psf(show=False, save=True)
+    blurred_image_list = BlurredImageList("DIPSourceHW1.jpg", '100_motion_paths.mat')
+    blurred_image_list.save_all_blurred_images()
+    image_restorer = ImageRestorer(blurred_image_list.blurred_image_list, p=10)
+    image_restorer.save_all_restored()
+    def load_image(path_to_file):
+        im = cv2.imread(path_to_file, cv2.IMREAD_GRAYSCALE).astype(float)
+        im /= 255
+        im = cv2.resize(im, (256, 256,))
+        return im
+    im = load_image("DIPSourceHW1.jpg")
+    psnr = PSNR_results(im, image_restorer.restored_image_list)
+    psnr.save_show_psnr(show=False, save=True)
 
 
 if __name__ == '__main__':
